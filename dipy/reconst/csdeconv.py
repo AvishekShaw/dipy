@@ -1,6 +1,7 @@
 import warnings
 
 import numpy as np
+import csv
 import numbers
 from scipy.integrate import quad
 from scipy.special import lpn, gamma
@@ -20,7 +21,7 @@ from dipy.reconst.shm import (sph_harm_ind_list, real_sph_harm,
                               real_sym_sh_basis, sh_to_rh, forward_sdeconv_mat,
                               SphHarmModel)
 from dipy.reconst.utils import _roi_in_volume, _mask_from_roi
-
+from dipy.reconst.custom import (gaussian_noisifier,add_zero_noise)
 from dipy.direction.peaks import peaks_from_model
 from dipy.core.geometry import vec2vec_rotmat
 
@@ -168,7 +169,7 @@ class AxSymShResponse(object):
 
 class ConstrainedSphericalDeconvModel(SphHarmModel):
 
-    def __init__(self, gtab, response, reg_sphere=None, sh_order=8,
+    def __init__(self, gtab, response, noise_type=None, fraction_noisy_voxels = 0, reg_sphere=None, sh_order=8,
                  lambda_=1, tau=0.1, convergence=50):
         r""" Constrained Spherical Deconvolution (CSD) [1]_.
 
@@ -193,6 +194,15 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
             function without diffusion weighting (i.e. S0).  This is to be able
             to generate a single fiber synthetic signal. The response function
             will be used as deconvolution kernel ([1]_).
+        noise_type : string(optional)
+            Type of noise to be applied to the convolution matrix.
+            Possible options:
+            -----------------
+            None : no noise added
+            gaussian : gaussian noise added
+            zero_noise : some elements of the convolution matrix made zero
+        fraction_noisy_voxels : real number between 0 and 1, both ends included
+            fraction of total voxels to which we need to apply noise. 
         reg_sphere : Sphere (optional)
             sphere used to build the regularization B matrix.
             Default: 'symmetric362'.
@@ -229,7 +239,12 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
         SphHarmModel.__init__(self, gtab)
         m, n = sph_harm_ind_list(sh_order)
         self.m, self.n = m, n
+        
+        # _where_b0s is a list of indices where the b value is 0
         self._where_b0s = lazy_index(gtab.b0s_mask)
+
+        # _where_dwi is a list of indices where the b values is not 0.
+        # it is a complementary list to _where_b0s.
         self._where_dwi = lazy_index(~gtab.b0s_mask)
 
         no_params = ((sh_order + 1) * (sh_order + 2)) / 2
@@ -282,12 +297,18 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
         self.convergence = convergence
         self._X = X = self.R.diagonal() * self.B_dwi
         self._P = np.dot(X.T, X)
+        self.noise_type = noise_type
+        self.fraction_noisy_voxels = fraction_noisy_voxels
 
     @multi_voxel_fit
     def fit(self, data):
         dwi_data = data[self._where_dwi]
-        shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.tau,
-                                convergence=self.convergence, P=self._P)
+        shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.noise_type,self.fraction_noisy_voxels,
+            self.tau,convergence=self.convergence, P=self._P)
+
+        with open('lstsq_20_noise.csv','a') as csvfile:
+            csvwriter = csv.writer(csvfile)
+            csvwriter.writerow(list(shm_coeff))
         return SphHarmFit(self, shm_coeff, None)
 
     def predict(self, sh_coeff, gtab=None, S0=1.):
@@ -513,6 +534,8 @@ def forward_sdt_deconv_mat(ratio, n, r2_term=False):
     return np.diag(b), np.diag(bb)
 
 
+# potrf computes the 'Cholesky factorization' of a matrix
+# potrs computes the linear system of equations using Cholesky-factored coefficient matrix.
 potrf, potrs = ll.get_lapack_funcs(('potrf', 'potrs'))
 
 
@@ -530,8 +553,15 @@ def _solve_cholesky(Q, z):
         raise ValueError(msg)
     return f
 
+def _solve_least_squares(Q,z):
+    # np.linalg.lstsq returns either the exact solution, if applicable or minimizes
+    # the ||ax - b||
 
-def csdeconv(dwsignal, X, B_reg, tau=0.1, convergence=50, P=None):
+    return np.linalg.lstsq(Q, z, rcond=-1)[0]
+    
+
+
+def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, convergence=50, P=None):
     r""" Constrained-regularized spherical deconvolution (CSD) [1]_
 
     Deconvolves the axially symmetric single fiber response function `r_rh` in
@@ -548,6 +578,15 @@ def csdeconv(dwsignal, X, B_reg, tau=0.1, convergence=50, P=None):
     B_reg : array (N, B)
         SH basis matrix which maps FOD coefficients to FOD values on the
         surface of the sphere. B_reg should be scaled to account for lambda.
+    noise_type : string(optional)
+            Type of noise to be applied to the convolution matrix.
+            Possible options:
+            -----------------
+            None : no noise added
+            gaussian : gaussian noise added
+            zero_noise : some elements of the convolution matrix made zero
+    fraction_noisy_voxels : real number between 0 and 1, both ends included
+        fraction of total voxels to which we need to apply noise.
     tau : float
         Threshold controlling the amplitude below which the corresponding fODF
         is assumed to be zero.  Ideally, tau should be set to zero. However, to
@@ -563,6 +602,7 @@ def csdeconv(dwsignal, X, B_reg, tau=0.1, convergence=50, P=None):
         This is an optimization to avoid computing ``dot(X.T, X)`` many times.
         If the same ``X`` is used many times, ``P`` can be precomputed and
         passed to this function.
+
 
     Returns
     -------
@@ -644,19 +684,22 @@ def csdeconv(dwsignal, X, B_reg, tau=0.1, convergence=50, P=None):
            constrained super-resolved spherical deconvolution.
 
     """
+    if (noise_type not in [None, 'gaussian','zero_noise']):
+        raise ValueError("Please enter a valid noise type")
+
     mu = 1e-5
     if P is None:
         P = np.dot(X.T, X)
     z = np.dot(X.T, dwsignal)
 
     try:
-        fodf_sh = _solve_cholesky(P, z)
+        fodf_sh = _solve_least_squares(P, z)
     except la.LinAlgError:
         P = P + mu * np.eye(P.shape[0])
-        fodf_sh = _solve_cholesky(P, z)
+        fodf_sh = _solve_least_squares(P, z)
     # For the first iteration we use a smooth FOD that only uses SH orders up
     # to 4 (the first 15 coefficients).
-    fodf = np.dot(B_reg[:, :15], fodf_sh[:15])
+    fodf = np.dot(B_reg[:, :15], fodf_sh[:15]) 
     # The mean of an fodf can be computed by taking $Y_{0,0} * coeff_{0,0}$
     threshold = B_reg[0, 0] * fodf_sh[0] * tau
     where_fodf_small = (fodf < threshold).nonzero()[0]
@@ -677,11 +720,30 @@ def csdeconv(dwsignal, X, B_reg, tau=0.1, convergence=50, P=None):
         # sense, this "adds" a measurement, which can help to better estimate
         # the fodf_sh, even if you have more SH coefficients to estimate than
         # actual S measurements.
+        
+        # the number of iterations it takes to solve a voxel is in the average range of 5-7
+        # print("num_it" + str(num_it))
+
+
         H = B_reg.take(where_fodf_small, axis=0)
 
         # We use the Cholesky decomposition to solve for the SH coefficients.
+        # The shape of Q is (45,45). This is in line with 45 coefficient of even 
+        # orders upto lmax = 8
+        if noise_type == None:
+            pass
+        elif noise_type == 'gaussian':
+            P = gaussian_noisifier(P,fraction_noisy_voxels)
+        elif noise_type == 'zero_noise':
+            P = add_zero_noise(P,fraction_noisy_voxels)
+
+        # if(num_it==1):
+            # print(P)
         Q = P + np.dot(H.T, H)
-        fodf_sh = _solve_cholesky(Q, z)
+        
+       
+        fodf_sh = _solve_least_squares(Q, z)
+        #fodf_sh = _solve_least_squares(Q, z)
 
         # Sample the FOD using the regularization sphere and compute k.
         fodf = np.dot(B_reg, fodf_sh)
