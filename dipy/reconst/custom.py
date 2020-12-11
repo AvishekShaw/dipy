@@ -21,8 +21,8 @@ def gaussian_noisifier(A,fraction_noisy_voxels):
 
 	m,n = A.shape
 	num_noisy_voxels = int(np.floor(m*n*fraction_noisy_voxels))
-	random_list = random.sample(range(0,m*n),num_noisy_voxels)
-	for i in random_list:
+	random_ele = random.sample(range(0,m*n),num_noisy_voxels) # to sample from the elements of the matrix
+	for i in random_ele:
 		A[i//n,i%n] += np.random.randn()
 	return(A)
 
@@ -48,9 +48,12 @@ def add_zero_noise(A,fraction_noisy_voxels):
 	
 	m,n = A.shape
 	num_noisy_voxels = int(np.floor(m*n*fraction_noisy_voxels))
-	random_list = random.sample(range(0,m*n),num_noisy_voxels)
-	for i in random_list:
+	random_ele = random.sample(range(0,m*n),num_noisy_voxels) # to sample from the elements of the matrix
+	for i in random_ele:
 		# if (i%(n+1)==0):pass
 		A[i//n,i%n] = 0
 	return(A)
 
+def csd_min_func(x,A,b,H):
+	print(A.shape,b.shape,H.shape)
+	return(np.linalg.norm(A@x-b,ord=2,axis=1) +  np.linalg.norm(H@x,ord=2,axis=1))

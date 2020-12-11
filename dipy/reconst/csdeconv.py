@@ -7,6 +7,9 @@ from scipy.integrate import quad
 from scipy.special import lpn, gamma
 import scipy.linalg as la
 import scipy.linalg.lapack as ll
+from scipy.sparse.linalg import cg as conj_grad
+from scipy.sparse.linalg import cgs as conj_grad_sq
+from scipy.optimize import least_squares as ls
 
 from dipy.data import small_sphere, get_sphere, default_sphere
 
@@ -21,7 +24,7 @@ from dipy.reconst.shm import (sph_harm_ind_list, real_sph_harm,
                               real_sym_sh_basis, sh_to_rh, forward_sdeconv_mat,
                               SphHarmModel)
 from dipy.reconst.utils import _roi_in_volume, _mask_from_roi
-from dipy.reconst.custom import (gaussian_noisifier,add_zero_noise)
+from dipy.reconst.custom import (gaussian_noisifier,add_zero_noise,csd_min_func)
 from dipy.direction.peaks import peaks_from_model
 from dipy.core.geometry import vec2vec_rotmat
 
@@ -691,6 +694,7 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
     if P is None:
         P = np.dot(X.T, X)
     z = np.dot(X.T, dwsignal)
+    print(X.shape,dwsignal.shape)
 
     try:
         fodf_sh = _solve_least_squares(P, z)
@@ -721,13 +725,16 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
         # the fodf_sh, even if you have more SH coefficients to estimate than
         # actual S measurements.
         
-        # the number of iterations it takes to solve a voxel is in the average range of 5-7
+        # A: the number of iterations it takes to solve a voxel is in the average range of 5-7
         # print("num_it" + str(num_it))
-
+        # print(num_it)
 
         H = B_reg.take(where_fodf_small, axis=0)
+        if num_it==1:
+        	H_init = H
+        	# print(H_init.T@H_init)
 
-        # We use the Cholesky decomposition to solve for the SH coefficients.
+        # A: We use the Cholesky decomposition to solve for the SH coefficients.
         # The shape of Q is (45,45). This is in line with 45 coefficient of even 
         # orders upto lmax = 8
         if noise_type == None:
@@ -742,8 +749,12 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
         Q = P + np.dot(H.T, H)
         
        
-        fodf_sh = _solve_least_squares(Q, z)
-        #fodf_sh = _solve_least_squares(Q, z)
+        # fodf_sh = _solve_cholesky(Q, z)
+        # fodf_sh = _solve_least_squares(Q, z)
+        # fodf_sh = conj_grad(Q,z)[0]
+        #fodf_sh = conj_grad_sq(Q,z)[0]
+        x0=np.random.randn(45)
+        fod_sh = ls(csd_min_func,x0=x0,args=(P,dwsignal,H)).x
 
         # Sample the FOD using the regularization sphere and compute k.
         fodf = np.dot(B_reg, fodf_sh)
@@ -752,6 +763,8 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
 
         if (len(where_fodf_small) == len(where_fodf_small_last) and
                 (where_fodf_small == where_fodf_small_last).all()):
+            # print(H.T@)
+            # print(H_init.T@H_init - H.T@H)
             break
     else:
         msg = 'maximum number of iterations exceeded - failed to converge'

@@ -9,11 +9,7 @@ from dipy.data import get_fnames, default_sphere
 from dipy.io.gradients import read_bvals_bvecs
 from dipy.io.image import load_nifti
 from dipy.reconst.custom import (gaussian_noisifier,add_zero_noise)
-
-
-
-
-
+from scipy.sparse.linalg import cg as conj_grad
 
 
 
@@ -25,9 +21,9 @@ data, affine = load_nifti(hardi_fname)
 
 noise_type = 'gaussian'
 fraction_noise  = .2
-data_small = data[20:51, 55:86, 38:69]
+data_small = data[25:30, 55:60, 35:40]
 save_fig = False
-csd_fit = False
+csd_fit = True
 
 
 # There are 160 bvals corresponding to 160 directions
@@ -91,7 +87,7 @@ if csd_fit:
 		start = time.time()
 		csd_fit = csd_model.fit(data_small)
 		end=time.time()
-		# print(end-start, "\n")
+		print(end-start, "\n")
 
 
 
@@ -130,7 +126,7 @@ if save_fig:
 	    window.show(scene)
 
 
-read_data = True
+read_data = False
 
 
 '''Following code fragment is for finding out the norm difference of fODF arrays produced
@@ -155,6 +151,7 @@ if read_data:
 
 	print(type(norm_percent))
 
+# print(conj_grad(np.eye(3),np.array([1,2,3]))[0])
 
 
 
