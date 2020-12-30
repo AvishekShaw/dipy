@@ -19,9 +19,9 @@ hardi_fname, hardi_bval_fname, hardi_bvec_fname = get_fnames('stanford_hardi')
 data, affine = load_nifti(hardi_fname)
 #print("The shape of data is:" + str(data.shape))
 
-noise_type = 'gaussian'
+noise_type = None
 fraction_noise  = .2
-data_small = data[25:30, 55:60, 35:40]
+data_small = data[15:16, 45:46, 16:18]
 save_fig = False
 csd_fit = True
 

@@ -24,7 +24,7 @@ from dipy.reconst.shm import (sph_harm_ind_list, real_sph_harm,
                               real_sym_sh_basis, sh_to_rh, forward_sdeconv_mat,
                               SphHarmModel)
 from dipy.reconst.utils import _roi_in_volume, _mask_from_roi
-from dipy.reconst.custom import (gaussian_noisifier,add_zero_noise,csd_min_func)
+from dipy.reconst.custom import (gaussian_noisifier,add_zero_noise,csd_min_func,const_ls)
 from dipy.direction.peaks import peaks_from_model
 from dipy.core.geometry import vec2vec_rotmat
 
@@ -694,13 +694,13 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
     if P is None:
         P = np.dot(X.T, X)
     z = np.dot(X.T, dwsignal)
-    print(X.shape,dwsignal.shape)
+    # print(X.shape,dwsignal.shape)
 
     try:
-        fodf_sh = _solve_least_squares(P, z)
+        fodf_sh = _solve_cholesky(P, z)
     except la.LinAlgError:
         P = P + mu * np.eye(P.shape[0])
-        fodf_sh = _solve_least_squares(P, z)
+        fodf_sh = _solve_cholesky(P, z)
     # For the first iteration we use a smooth FOD that only uses SH orders up
     # to 4 (the first 15 coefficients).
     fodf = np.dot(B_reg[:, :15], fodf_sh[:15]) 
@@ -732,6 +732,9 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
         H = B_reg.take(where_fodf_small, axis=0)
         if num_it==1:
         	H_init = H
+        	u_init,s_init,vt_init = np.linalg.svd(H_init.T@H_init)
+        	print(s_init,1)
+        	# print(s_init.shape)
         	# print(H_init.T@H_init)
 
         # A: We use the Cholesky decomposition to solve for the SH coefficients.
@@ -749,12 +752,26 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
         Q = P + np.dot(H.T, H)
         
        
-        # fodf_sh = _solve_cholesky(Q, z)
+       # Solve using Cholesky Decomposition
+        fodf_sh = _solve_cholesky(Q, z) 
+
+       # Solve using numpy least squares
         # fodf_sh = _solve_least_squares(Q, z)
+
+       # Solve using conjugate gradient method
         # fodf_sh = conj_grad(Q,z)[0]
-        #fodf_sh = conj_grad_sq(Q,z)[0]
-        x0=np.random.randn(45)
-        fod_sh = ls(csd_min_func,x0=x0,args=(P,dwsignal,H)).x
+
+       # Solve using conjugate gradient squared methon
+        # fodf_sh = conj_grad_sq(Q,z)[0]
+
+        x0=np.random.uniform(low=0,high=1,size=45)
+
+       # Solve using unconstrained scipy least squares
+        # fod_sh = ls(csd_min_func,x0=x0,args=(P,dwsignal,H)).x
+
+       # solve using constrained scipy least squares
+        # fod_sh = ls(const_ls,x0=x0,bounds=(0,np.inf),args=(P,z),verbose=0).x
+        
 
         # Sample the FOD using the regularization sphere and compute k.
         fodf = np.dot(B_reg, fodf_sh)
@@ -765,6 +782,17 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
                 (where_fodf_small == where_fodf_small_last).all()):
             # print(H.T@)
             # print(H_init.T@H_init - H.T@H)
+            u_final,s_final,vt_final = np.linalg.svd(H.T@H)
+   
+            print(s_final)
+            # print("initial and final condition no. of H.T@H"+str(np.linalg.cond(H_init.T@H_init,p=2))+" "+ str(np.linalg.cond(H.T@H,p=2)))
+            # print("initial and final rank of H" + str(np.linalg.matrix_rank(H_init))+" "+ str(np.linalg.matrix_rank(H)))
+            # print("sigma difference"+str(np.linalg.norm(s_final-s_init,ord=2)))
+            # print("u initial norm"+str(np.linalg.norm(u_init,ord=2)))
+            # print("u final norm"+str(np.linalg.norm(u_final,ord=2)))
+            # print("u difference"+str(np.linalg.norm(u_final-u_init,ord=2)))
+            # print("v initial norm"+str(np.linalg.norm(vt_init,ord=2)))
+            # print("vt difference"+str(np.linalg.norm(vt_final-vt_init,ord=2)))
             break
     else:
         msg = 'maximum number of iterations exceeded - failed to converge'
@@ -1263,3 +1291,4 @@ def fa_trace_to_lambdas(fa=0.08, trace=0.0021):
     lambda2 = (trace / 3.) * (1 - fa / (3 - 2 * fa ** 2) ** (1 / 2.))
     evals = np.array([lambda1, lambda2, lambda2])
     return evals
+

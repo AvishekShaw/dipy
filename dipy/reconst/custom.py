@@ -1,5 +1,6 @@
 import numpy as np
 import random
+from scipy.optimize import least_squares
 
 def gaussian_noisifier(A,fraction_noisy_voxels):
 	"""
@@ -55,5 +56,18 @@ def add_zero_noise(A,fraction_noisy_voxels):
 	return(A)
 
 def csd_min_func(x,A,b,H):
+	"""
+	Returns the objective function of minimization of Constrained Spherical Deconvolution.
+	The equation is assumed to be ||Ax-b||^2 + ||Hx||^2.
+	"""
 	print(A.shape,b.shape,H.shape)
 	return(np.linalg.norm(A@x-b,ord=2,axis=1) +  np.linalg.norm(H@x,ord=2,axis=1))
+
+def const_ls(x,A,b):
+	"""Constrained Least squares calling function"""
+	# print(A.shape,b.shape)
+	return(A@x - b)
+	# jac = A
+	# x0= np.random.randn(45)
+	# res = least_squares(fun,x0,jac=jac,bounds=(0,np.inf),args=(A,b),verbose=1)
+	# print(res.x)
