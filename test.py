@@ -20,11 +20,11 @@ data, affine = load_nifti(hardi_fname)
 #print("The shape of data is:" + str(data.shape))
 
 noise_type = None
-fraction_noise  = .2
-data_small = data[15:16, 45:46, 16:18]
+fraction_noise  = .4
+data_small = data[15:16, 45:46, 16:20]
 save_fig = False
 csd_fit = True
-
+read_data = False
 
 # There are 160 bvals corresponding to 160 directions
 # and bvecs is an array of (160,3) corresponding to 
@@ -87,7 +87,7 @@ if csd_fit:
 		start = time.time()
 		csd_fit = csd_model.fit(data_small)
 		end=time.time()
-		print(end-start, "\n")
+		print("The time taken for CSD fit in secs:"+str(end-start),"\n")
 
 
 
@@ -126,7 +126,7 @@ if save_fig:
 	    window.show(scene)
 
 
-read_data = False
+
 
 
 '''Following code fragment is for finding out the norm difference of fODF arrays produced
@@ -134,22 +134,23 @@ by different techniques. For eg: you could find out the fODF value by cholesky w
 and numpy least squares with 20 percent noise and find out the difference between them and plot
 them to see the perturbation effect of induced noise.'''
 
-if read_data:
-	cholesky = pd.read_csv("./cholesky_no_noise.csv").values
-	lstsq = pd.read_csv("./lstsq_20_noise.csv").values
-	print(lstsq.shape)
 
-	residual_norm = np.linalg.norm((cholesky-lstsq),ord=2,axis=1)
-	cholesky_norm = np.linalg.norm((cholesky),ord=2,axis=1)
+if read_data:
+
+	cholesky_20 = pd.read_csv("./cholesky_gaussian_20.csv").values
+	svd_20 = pd.read_csv("./svd_gaussian_20.csv").values
+
+	residual_norm = np.linalg.norm((cholesky_20-svd_20),ord=2,axis=1)
+	cholesky_norm = np.linalg.norm((cholesky_20),ord=2,axis=1)
 
 	norm_percent = (residual_norm/cholesky_norm)*100
 	_ = plt.hist(norm_percent,bins='auto')
-	plt.xlabel("\%differece", fontsize = 12)
+	plt.xlabel("differece(%)", fontsize = 12)
 	plt.ylabel("No. of voxels", fontsize = 12)
-	plt.title("Histogram comparing cholesky and np.lstsq with 20% noise", fontsize = 12)
-	plt.savefig("hist.jpg",dpi=300)
+	# plt.title("Histogram comparing cholesky and svd", fontsize = 12)
+	# plt.savefig("hist_cholesky_qr_80.jpg",dpi=300)
 
-	print(type(norm_percent))
+	print((np.mean(norm_percent)))
 
 # print(conj_grad(np.eye(3),np.array([1,2,3]))[0])
 

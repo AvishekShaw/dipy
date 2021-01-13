@@ -1,6 +1,7 @@
 import numpy as np
 import random
 from scipy.optimize import least_squares
+from scipy.linalg import (svd,qr,solve)
 
 def gaussian_noisifier(A,fraction_noisy_voxels):
 	"""
@@ -71,3 +72,29 @@ def const_ls(x,A,b):
 	# x0= np.random.randn(45)
 	# res = least_squares(fun,x0,jac=jac,bounds=(0,np.inf),args=(A,b),verbose=1)
 	# print(res.x)
+
+def solve_svd(A,b):
+    # compute svd of A
+    U,s,Vh = svd(A)
+
+    # U diag(s) Vh x = b <=> diag(s) Vh x = U.T b = c
+    c = np.dot(U.T,b)
+    # diag(s) Vh x = c <=> Vh x = diag(1/s) c = w (trivial inversion of a diagonal matrix)
+    w = np.dot(np.diag(1/s),c)
+    # Vh x = w <=> x = Vh.H w (where .H stands for hermitian = conjugate transpose)
+    x = np.dot(Vh.conj().T,w)
+    return x
+
+def solve_qr(A,b):
+	Q,R = qr(A)
+	y = Q.T@b
+	m,n = R.shape
+	x=np.zeros((m,1))
+	#back substitution 
+	x[m-1] = y[m-1]/R[m-1,n-1]
+	for i in range(m-2,-1,-1):
+		x[i] = (y[i] - np.dot(R[i,i+1:n].reshape(1,-1),x[i+1:m].reshape(-1,1)))/R[i,i]
+	return(x)
+
+
+

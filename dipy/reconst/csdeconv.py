@@ -7,8 +7,9 @@ from scipy.integrate import quad
 from scipy.special import lpn, gamma
 import scipy.linalg as la
 import scipy.linalg.lapack as ll
-from scipy.sparse.linalg import cg as conj_grad
-from scipy.sparse.linalg import cgs as conj_grad_sq
+from scipy.linalg import svd
+from scipy.sparse.linalg import cg 
+from scipy.sparse.linalg import cgs
 from scipy.optimize import least_squares as ls
 
 from dipy.data import small_sphere, get_sphere, default_sphere
@@ -24,12 +25,17 @@ from dipy.reconst.shm import (sph_harm_ind_list, real_sph_harm,
                               real_sym_sh_basis, sh_to_rh, forward_sdeconv_mat,
                               SphHarmModel)
 from dipy.reconst.utils import _roi_in_volume, _mask_from_roi
-from dipy.reconst.custom import (gaussian_noisifier,add_zero_noise,csd_min_func,const_ls)
+from dipy.reconst.custom import (gaussian_noisifier,add_zero_noise,csd_min_func,const_ls,solve_svd,solve_qr)
 from dipy.direction.peaks import peaks_from_model
 from dipy.core.geometry import vec2vec_rotmat
 
 from dipy.utils.deprecator import deprecate_with_version
 
+# Control parameters
+write_data = False
+algo = 'cholesky' # method used to solve Ax=b
+filename = "svd_gaussian_40.csv"
+debug = False
 
 @deprecate_with_version("dipy.reconst.csdeconv.auto_response is deprecated, "
                         "Please use "
@@ -309,9 +315,10 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
         shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.noise_type,self.fraction_noisy_voxels,
             self.tau,convergence=self.convergence, P=self._P)
 
-        with open('lstsq_20_noise.csv','a') as csvfile:
-            csvwriter = csv.writer(csvfile)
-            csvwriter.writerow(list(shm_coeff))
+        if write_data:
+	        with open(filename,'a') as csvfile:
+	            csvwriter = csv.writer(csvfile)
+	            csvwriter.writerow(list(np.round(shm_coeff,5)))
         return SphHarmFit(self, shm_coeff, None)
 
     def predict(self, sh_coeff, gtab=None, S0=1.):
@@ -692,6 +699,12 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
 
     mu = 1e-5
     if P is None:
+        if noise_type == None:
+            pass
+        elif noise_type == 'gaussian':
+            X = gaussian_noisifier(X,fraction_noisy_voxels)
+        elif noise_type == 'zero_noise':
+            X = add_zero_noise(X,fraction_noisy_voxels)
         P = np.dot(X.T, X)
     z = np.dot(X.T, dwsignal)
     # print(X.shape,dwsignal.shape)
@@ -730,22 +743,17 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
         # print(num_it)
 
         H = B_reg.take(where_fodf_small, axis=0)
-        if num_it==1:
-        	H_init = H
-        	u_init,s_init,vt_init = np.linalg.svd(H_init.T@H_init)
-        	print(s_init,1)
-        	# print(s_init.shape)
-        	# print(H_init.T@H_init)
+        
+        if debug:
+            if num_it==1:
+            	H_init = H
+            	u_init,s_init,vt_init = np.linalg.svd(H_init.T@H_init)
+            	print(s_init,1)
+
 
         # A: We use the Cholesky decomposition to solve for the SH coefficients.
         # The shape of Q is (45,45). This is in line with 45 coefficient of even 
         # orders upto lmax = 8
-        if noise_type == None:
-            pass
-        elif noise_type == 'gaussian':
-            P = gaussian_noisifier(P,fraction_noisy_voxels)
-        elif noise_type == 'zero_noise':
-            P = add_zero_noise(P,fraction_noisy_voxels)
 
         # if(num_it==1):
             # print(P)
@@ -753,16 +761,27 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
         
        
        # Solve using Cholesky Decomposition
-        fodf_sh = _solve_cholesky(Q, z) 
+        if algo == 'cholesky':
+        	fodf_sh = _solve_cholesky(Q, z) 
 
        # Solve using numpy least squares
         # fodf_sh = _solve_least_squares(Q, z)
+       
+       # Solve using SVD:
+        if algo == 'svd':
+       		fodf_sh = solve_svd(Q,z)
+
+       # Solve using QR:
+        if algo == 'qr':
+        	fod_sh = solve_qr(Q,z)
 
        # Solve using conjugate gradient method
-        # fodf_sh = conj_grad(Q,z)[0]
+        if algo == 'cg':
+        	fodf_sh = cg(Q,z)[0]
 
-       # Solve using conjugate gradient squared methon
-        # fodf_sh = conj_grad_sq(Q,z)[0]
+       # Solve using conjugate gradient squared method
+        if algo == 'cgs':
+        	fodf_sh = cgs(Q,z)[0]
 
         x0=np.random.uniform(low=0,high=1,size=45)
 
@@ -770,7 +789,8 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
         # fod_sh = ls(csd_min_func,x0=x0,args=(P,dwsignal,H)).x
 
        # solve using constrained scipy least squares
-        # fod_sh = ls(const_ls,x0=x0,bounds=(0,np.inf),args=(P,z),verbose=0).x
+        if algo == 'constrained_ls':
+            fod_sh = ls(const_ls,x0=x0,bounds=(0,np.inf),args=(P,z),verbose=0).x
         
 
         # Sample the FOD using the regularization sphere and compute k.
@@ -780,19 +800,18 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
 
         if (len(where_fodf_small) == len(where_fodf_small_last) and
                 (where_fodf_small == where_fodf_small_last).all()):
-            # print(H.T@)
-            # print(H_init.T@H_init - H.T@H)
-            u_final,s_final,vt_final = np.linalg.svd(H.T@H)
-   
-            print(s_final)
-            # print("initial and final condition no. of H.T@H"+str(np.linalg.cond(H_init.T@H_init,p=2))+" "+ str(np.linalg.cond(H.T@H,p=2)))
-            # print("initial and final rank of H" + str(np.linalg.matrix_rank(H_init))+" "+ str(np.linalg.matrix_rank(H)))
-            # print("sigma difference"+str(np.linalg.norm(s_final-s_init,ord=2)))
-            # print("u initial norm"+str(np.linalg.norm(u_init,ord=2)))
-            # print("u final norm"+str(np.linalg.norm(u_final,ord=2)))
-            # print("u difference"+str(np.linalg.norm(u_final-u_init,ord=2)))
-            # print("v initial norm"+str(np.linalg.norm(vt_init,ord=2)))
-            # print("vt difference"+str(np.linalg.norm(vt_final-vt_init,ord=2)))
+            
+            if debug:
+                u_final,s_final,vt_final = np.linalg.svd(H.T@H)
+                print(s_final)
+                print("initial and final condition no. of H.T@H"+str(np.linalg.cond(H_init.T@H_init,p=2))+" "+ str(np.linalg.cond(H.T@H,p=2)))
+                print("initial and final rank of H" + str(np.linalg.matrix_rank(H_init))+" "+ str(np.linalg.matrix_rank(H)))
+                # print("sigma difference"+str(np.linalg.norm(s_final-s_init,ord=2)))
+                # print("u initial norm"+str(np.linalg.norm(u_init,ord=2)))
+                # print("u final norm"+str(np.linalg.norm(u_final,ord=2)))
+                # print("u difference"+str(np.linalg.norm(u_final-u_init,ord=2)))
+                # print("v initial norm"+str(np.linalg.norm(vt_init,ord=2)))
+                # print("vt difference"+str(np.linalg.norm(vt_final-vt_init,ord=2)))
             break
     else:
         msg = 'maximum number of iterations exceeded - failed to converge'
