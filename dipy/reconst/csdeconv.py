@@ -11,6 +11,7 @@ from scipy.linalg import svd
 from scipy.sparse.linalg import cg 
 from scipy.sparse.linalg import cgs
 from scipy.optimize import least_squares as ls
+from scipy.optimize import nnls
 
 from dipy.data import small_sphere, get_sphere, default_sphere
 
@@ -25,17 +26,17 @@ from dipy.reconst.shm import (sph_harm_ind_list, real_sph_harm,
                               real_sym_sh_basis, sh_to_rh, forward_sdeconv_mat,
                               SphHarmModel)
 from dipy.reconst.utils import _roi_in_volume, _mask_from_roi
-from dipy.reconst.custom import (gaussian_noisifier,add_zero_noise,csd_min_func,const_ls,solve_svd,solve_qr)
+from dipy.reconst.custom import (gaussian_noisifier,add_zero_noise,unconstrained_objective,
+    solve_svd,solve_qr)
 from dipy.direction.peaks import peaks_from_model
 from dipy.core.geometry import vec2vec_rotmat
-
 from dipy.utils.deprecator import deprecate_with_version
 
 # Control parameters
-write_data = False
-algo = 'cholesky' # method used to solve Ax=b
-filename = "svd_gaussian_40.csv"
-debug = False
+write_data = True
+debug=False
+precision = 5 # the no. of digits after decimal being stored in the files
+
 
 @deprecate_with_version("dipy.reconst.csdeconv.auto_response is deprecated, "
                         "Please use "
@@ -178,7 +179,7 @@ class AxSymShResponse(object):
 
 class ConstrainedSphericalDeconvModel(SphHarmModel):
 
-    def __init__(self, gtab, response, noise_type=None, fraction_noisy_voxels = 0, reg_sphere=None, sh_order=8,
+    def __init__(self, gtab, response,noise_type=None, fraction_noisy_voxels = 0,algo='cholesky', reg_sphere=None, sh_order=8,
                  lambda_=1, tau=0.1, convergence=50):
         r""" Constrained Spherical Deconvolution (CSD) [1]_.
 
@@ -308,17 +309,20 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
         self._P = np.dot(X.T, X)
         self.noise_type = noise_type
         self.fraction_noisy_voxels = fraction_noisy_voxels
+        self.algo = algo
 
     @multi_voxel_fit
     def fit(self, data):
         dwi_data = data[self._where_dwi]
-        shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.noise_type,self.fraction_noisy_voxels,
+        shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.noise_type,self.fraction_noisy_voxels,self.algo,
             self.tau,convergence=self.convergence, P=self._P)
 
         if write_data:
-	        with open(filename,'a') as csvfile:
+            filename = str(self.algo)+"_"+str(self.noise_type)+"_"+str(int(self.fraction_noisy_voxels*100))+".csv"
+            setwd(~/dipy/dipy/data)
+            with open(filename,'w') as csvfile:
 	            csvwriter = csv.writer(csvfile)
-	            csvwriter.writerow(list(np.round(shm_coeff,5)))
+	            csvwriter.writerow(list(np.round(shm_coeff,precision)))
         return SphHarmFit(self, shm_coeff, None)
 
     def predict(self, sh_coeff, gtab=None, S0=1.):
@@ -571,7 +575,7 @@ def _solve_least_squares(Q,z):
     
 
 
-def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, convergence=50, P=None):
+def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,tau=0.1, convergence=50, P=None):
     r""" Constrained-regularized spherical deconvolution (CSD) [1]_
 
     Deconvolves the axially symmetric single fiber response function `r_rh` in
@@ -707,13 +711,18 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
             X = add_zero_noise(X,fraction_noisy_voxels)
         P = np.dot(X.T, X)
     z = np.dot(X.T, dwsignal)
-    # print(X.shape,dwsignal.shape)
+    if debug:
+        print("shape of X is :" + str(X.shape))
+        print("shape of signal dwsignal is :" + str(dwsignal.shape))
+        print("shape of B_reg is : " + str(B_reg.shape))
 
     try:
         fodf_sh = _solve_cholesky(P, z)
     except la.LinAlgError:
         P = P + mu * np.eye(P.shape[0])
         fodf_sh = _solve_cholesky(P, z)
+    if debug:
+        print("shape of fodf_sh is : " + str(fodf_sh.shape))
     # For the first iteration we use a smooth FOD that only uses SH orders up
     # to 4 (the first 15 coefficients).
     fodf = np.dot(B_reg[:, :15], fodf_sh[:15]) 
@@ -786,12 +795,12 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
         x0=np.random.uniform(low=0,high=1,size=45)
 
        # Solve using unconstrained scipy least squares
-        # fod_sh = ls(csd_min_func,x0=x0,args=(P,dwsignal,H)).x
+        # fod_sh = ls(unconstrained_objective,x0=x0,args=(P,dwsignal,H)).x
 
        # solve using constrained scipy least squares
         if algo == 'constrained_ls':
-            fod_sh = ls(const_ls,x0=x0,bounds=(0,np.inf),args=(P,z),verbose=0).x
-        
+            # fod_sh = ls(constrained_ls,x0=x0,bounds=(0,np.inf),args=(P,z),verbose=0).x
+            fodf_sh = nnls(P,z)
 
         # Sample the FOD using the regularization sphere and compute k.
         fodf = np.dot(B_reg, fodf_sh)
@@ -802,6 +811,7 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,tau=0.1, conv
                 (where_fodf_small == where_fodf_small_last).all()):
             
             if debug:
+                print("shape of fodf is : " + str(fodf.shape))
                 u_final,s_final,vt_final = np.linalg.svd(H.T@H)
                 print(s_final)
                 print("initial and final condition no. of H.T@H"+str(np.linalg.cond(H_init.T@H_init,p=2))+" "+ str(np.linalg.cond(H.T@H,p=2)))

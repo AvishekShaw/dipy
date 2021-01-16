@@ -56,15 +56,15 @@ def add_zero_noise(A,fraction_noisy_voxels):
 		A[i//n,i%n] = 0
 	return(A)
 
-def csd_min_func(x,A,b,H):
+def unconstrained_objective(x,A,b,H):
 	"""
 	Returns the objective function of minimization of Constrained Spherical Deconvolution.
 	The equation is assumed to be ||Ax-b||^2 + ||Hx||^2.
 	"""
-	print(A.shape,b.shape,H.shape)
+	# print(A.shape,b.shape,H.shape)
 	return(np.linalg.norm(A@x-b,ord=2,axis=1) +  np.linalg.norm(H@x,ord=2,axis=1))
 
-def const_ls(x,A,b):
+def constrained_objective(x,A,b):
 	"""Constrained Least squares calling function"""
 	# print(A.shape,b.shape)
 	return(A@x - b)
