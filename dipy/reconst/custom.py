@@ -25,7 +25,7 @@ def gaussian_noisifier(A,fraction_noisy_voxels):
 	num_noisy_voxels = int(np.floor(m*n*fraction_noisy_voxels))
 	random_ele = random.sample(range(0,m*n),num_noisy_voxels) # to sample from the elements of the matrix
 	for i in random_ele:
-		A[i//n,i%n] += np.random.randn()
+		A[i//n,i%n] += np.random.normal(loc=0,scale=np.std(A))
 	return(A)
 
 

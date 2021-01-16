@@ -33,7 +33,7 @@ from dipy.core.geometry import vec2vec_rotmat
 from dipy.utils.deprecator import deprecate_with_version
 
 # Control parameters
-write_data = True
+write_data = False
 debug=False
 precision = 5 # the no. of digits after decimal being stored in the files
 
@@ -305,7 +305,19 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
         self.sh_order = sh_order
         self.tau = tau
         self.convergence = convergence
-        self._X = X = self.R.diagonal() * self.B_dwi
+        
+        X = self.R.diagonal() * self.B_dwi
+        if noise_type == None:
+            # print(np.max(X))
+            pass
+        elif noise_type == 'gaussian':
+            X = gaussian_noisifier(X,fraction_noisy_voxels)
+            # print(np.max(X))
+            # print('hello')
+        elif noise_type == 'zero_noise':
+            X = add_zero_noise(X,fraction_noisy_voxels)
+        
+        self._X = X
         self._P = np.dot(X.T, X)
         self.noise_type = noise_type
         self.fraction_noisy_voxels = fraction_noisy_voxels
@@ -319,10 +331,11 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
 
         if write_data:
             filename = str(self.algo)+"_"+str(self.noise_type)+"_"+str(int(self.fraction_noisy_voxels*100))+".csv"
-            setwd(~/dipy/dipy/data)
-            with open(filename,'w') as csvfile:
+            # setwd(~/dipy/dipy/data)
+            with open(filename,'a') as csvfile:
 	            csvwriter = csv.writer(csvfile)
 	            csvwriter.writerow(list(np.round(shm_coeff,precision)))
+            csvfile.close()
         return SphHarmFit(self, shm_coeff, None)
 
     def predict(self, sh_coeff, gtab=None, S0=1.):
@@ -700,7 +713,7 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,tau=0.1,
     """
     if (noise_type not in [None, 'gaussian','zero_noise']):
         raise ValueError("Please enter a valid noise type")
-
+    # print(P)
     mu = 1e-5
     if P is None:
         if noise_type == None:
@@ -711,10 +724,11 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,tau=0.1,
             X = add_zero_noise(X,fraction_noisy_voxels)
         P = np.dot(X.T, X)
     z = np.dot(X.T, dwsignal)
-    if debug:
-        print("shape of X is :" + str(X.shape))
-        print("shape of signal dwsignal is :" + str(dwsignal.shape))
-        print("shape of B_reg is : " + str(B_reg.shape))
+    
+    # print("shape of X is :" + str(X.shape))
+    # print("shape of signal dwsignal is :" + str(dwsignal.shape))
+    # print("shape of B_reg is : " + str(B_reg.shape))
+    # print("X(Max) %f , X(min) %f, X(mean) %f, X(std) %f" %(np.max(X),np.min(X),np.mean(X),np.std(X)))
 
     try:
         fodf_sh = _solve_cholesky(P, z)
@@ -810,18 +824,18 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,tau=0.1,
         if (len(where_fodf_small) == len(where_fodf_small_last) and
                 (where_fodf_small == where_fodf_small_last).all()):
             
-            if debug:
-                print("shape of fodf is : " + str(fodf.shape))
-                u_final,s_final,vt_final = np.linalg.svd(H.T@H)
-                print(s_final)
-                print("initial and final condition no. of H.T@H"+str(np.linalg.cond(H_init.T@H_init,p=2))+" "+ str(np.linalg.cond(H.T@H,p=2)))
-                print("initial and final rank of H" + str(np.linalg.matrix_rank(H_init))+" "+ str(np.linalg.matrix_rank(H)))
-                # print("sigma difference"+str(np.linalg.norm(s_final-s_init,ord=2)))
-                # print("u initial norm"+str(np.linalg.norm(u_init,ord=2)))
-                # print("u final norm"+str(np.linalg.norm(u_final,ord=2)))
-                # print("u difference"+str(np.linalg.norm(u_final-u_init,ord=2)))
-                # print("v initial norm"+str(np.linalg.norm(vt_init,ord=2)))
-                # print("vt difference"+str(np.linalg.norm(vt_final-vt_init,ord=2)))
+            
+            # print("shape of fodf is : " + str(fodf.shape))
+            # u_final,s_final,vt_final = np.linalg.svd(H.T@H)
+            # print(s_final)
+            # print("initial and final condition no. of H.T@H"+str(np.linalg.cond(H_init.T@H_init,p=2))+" "+ str(np.linalg.cond(H.T@H,p=2)))
+            # print("initial and final rank of H" + str(np.linalg.matrix_rank(H_init))+" "+ str(np.linalg.matrix_rank(H)))
+            # print("sigma difference"+str(np.linalg.norm(s_final-s_init,ord=2)))
+            # print("u initial norm"+str(np.linalg.norm(u_init,ord=2)))
+            # print("u final norm"+str(np.linalg.norm(u_final,ord=2)))
+            # print("u difference"+str(np.linalg.norm(u_final-u_init,ord=2)))
+            # print("v initial norm"+str(np.linalg.norm(vt_init,ord=2)))
+            # print("vt difference"+str(np.linalg.norm(vt_final-vt_init,ord=2)))
             break
     else:
         msg = 'maximum number of iterations exceeded - failed to converge'
