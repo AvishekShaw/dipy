@@ -33,9 +33,9 @@ from dipy.core.geometry import vec2vec_rotmat
 from dipy.utils.deprecator import deprecate_with_version
 
 # Control parameters
-write_data = False
-debug=False
-precision = 5 # the no. of digits after decimal being stored in the files
+write_data = False # whether to write data into files or not
+precision = 5 # the no. of digits after decompositional being stored in the files
+debug = False
 
 
 @deprecate_with_version("dipy.reconst.csdeconv.auto_response is deprecated, "
