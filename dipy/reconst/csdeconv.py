@@ -26,8 +26,8 @@ from dipy.reconst.shm import (sph_harm_ind_list, real_sph_harm,
                               real_sym_sh_basis, sh_to_rh, forward_sdeconv_mat,
                               SphHarmModel)
 from dipy.reconst.utils import _roi_in_volume, _mask_from_roi
-from dipy.reconst.custom import (gaussian_noisifier,add_zero_noise,unconstrained_objective,
-    solve_svd,solve_qr)
+from dipy.reconst.custom import (gaussian_noisifier_matrix,add_zero_noise,unconstrained_objective,
+    solve_svd,solve_qr, solve_truncated_svd,solve_noisy_svd,solve_noisy_cholesky,solve_noisy_qr)
 from dipy.direction.peaks import peaks_from_model
 from dipy.core.geometry import vec2vec_rotmat
 from dipy.utils.deprecator import deprecate_with_version
@@ -35,8 +35,7 @@ from dipy.utils.deprecator import deprecate_with_version
 # Control parameters
 write_data = False # whether to write data into files or not
 precision = 5 # the no. of digits after decompositional being stored in the files
-debug = False
-
+n_components = 5 # for truncated SVD
 
 @deprecate_with_version("dipy.reconst.csdeconv.auto_response is deprecated, "
                         "Please use "
@@ -311,9 +310,9 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
             # print(np.max(X))
             pass
         elif noise_type == 'gaussian':
-            X = gaussian_noisifier(X,fraction_noisy_voxels)
+            X = gaussian_noisifier_matrix(X,fraction_noisy_voxels)
             # print(np.max(X))
-            # print('hello')
+
         elif noise_type == 'zero_noise':
             X = add_zero_noise(X,fraction_noisy_voxels)
         
@@ -719,7 +718,7 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,tau=0.1,
         if noise_type == None:
             pass
         elif noise_type == 'gaussian':
-            X = gaussian_noisifier(X,fraction_noisy_voxels)
+            X = gaussian_noisifier_matrix(X,fraction_noisy_voxels)
         elif noise_type == 'zero_noise':
             X = add_zero_noise(X,fraction_noisy_voxels)
         P = np.dot(X.T, X)
@@ -735,8 +734,8 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,tau=0.1,
     except la.LinAlgError:
         P = P + mu * np.eye(P.shape[0])
         fodf_sh = _solve_cholesky(P, z)
-    if debug:
-        print("shape of fodf_sh is : " + str(fodf_sh.shape))
+    
+    # print("shape of fodf_sh is : " + str(fodf_sh.shape))
     # For the first iteration we use a smooth FOD that only uses SH orders up
     # to 4 (the first 15 coefficients).
     fodf = np.dot(B_reg[:, :15], fodf_sh[:15]) 
@@ -766,12 +765,13 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,tau=0.1,
         # print(num_it)
 
         H = B_reg.take(where_fodf_small, axis=0)
+        # print("we have done calc of H")
         
-        if debug:
-            if num_it==1:
-            	H_init = H
-            	u_init,s_init,vt_init = np.linalg.svd(H_init.T@H_init)
-            	print(s_init,1)
+        
+        # if num_it==1:
+        # 	H_init = H
+        # 	u_init,s_init,vt_init = np.linalg.svd(H_init.T@H_init)
+        # 	print(s_init,1)
 
 
         # A: We use the Cholesky decomposition to solve for the SH coefficients.
@@ -781,11 +781,16 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,tau=0.1,
         # if(num_it==1):
             # print(P)
         Q = P + np.dot(H.T, H)
+        # print("we have done calculation of Q")
         
        
-       # Solve using Cholesky Decomposition
+        # Solve using Cholesky Decomposition
         if algo == 'cholesky':
-        	fodf_sh = _solve_cholesky(Q, z) 
+        	fodf_sh = _solve_cholesky(Q, z)
+
+        # Solve using Noisy Cholesky:
+        if algo == 'noisy_cholesky':
+            fodf_sh = solve_noisy_cholesky(Q,z,fraction_noisy_voxels) 
 
        # Solve using numpy least squares
         # fodf_sh = _solve_least_squares(Q, z)
@@ -794,9 +799,22 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,tau=0.1,
         if algo == 'svd':
        		fodf_sh = solve_svd(Q,z)
 
-       # Solve using QR:
+        # Solve using Noisy SVD:
+        if algo == 'noisy_svd':
+            fodf_sh = solve_noisy_svd(Q,z,fraction_noisy_voxels)
+
+        # Solve using Truncated SVD:
+        if algo == 'truncated_svd':
+            fodf_sh = solve_truncated_svd(Q,z,n_components)
+            # print(type(fodf_sh))
+
+        # Solve using QR:
         if algo == 'qr':
         	fod_sh = solve_qr(Q,z)
+
+        # Solve using QR:
+        if algo == 'noisy_qr':
+            fod_sh = solve_noisy_qr(Q,z,fraction_noisy_voxels)
 
        # Solve using conjugate gradient method
         if algo == 'cg':
