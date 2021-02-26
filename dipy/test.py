@@ -9,7 +9,7 @@ from dipy.core.gradients import gradient_table
 from dipy.data import get_fnames, default_sphere
 from dipy.io.gradients import read_bvals_bvecs
 from dipy.io.image import load_nifti
-from dipy.reconst.custom import (gaussian_noisifier_matrix,add_zero_noise,solve_svd)
+from dipy.reconst.custom import (gaussian_noisifier_matrix,add_zero_noise,solve_svd,solve_DSM,perturb_matrix)
 from scipy.sparse.linalg import cg as conj_grad
 
 
@@ -35,19 +35,21 @@ algo_list=['cholesky','noisy_cholesky','qr','noisy_qr','svd','noisy_svd','trunca
 
 #Control variables
 noise_type = None # Select out of None, 'gaussian', 'zero_noise'
-fraction_noisy_voxels  = 0.2 # Wont run if noise_type is None
-data_small = data[15:16, 55:59, 45:46]
+fraction_noisy_voxels  = 0.0 # Wont run if noise_type is None
+data_small = data[15:16, 55:56, 45:46]
 
-csd_fit = True # runs the CSD fitting procedure
+csd_fit = False # runs the CSD fitting procedure
 read_data = False # to read files, code segment below
 plot_data = False
+to_perturb = False
+solve_by_DSM = True
 
-algo = algo_list[5]
+algo = algo_list[4]
 num_csd_loops = 1
 
 if csd_fit:
 		from dipy.reconst.csdeconv import ConstrainedSphericalDeconvModel
-		csd_model = ConstrainedSphericalDeconvModel(gtab, response, noise_type=None,fraction_noisy_voxels=0.2,algo=algo)
+		csd_model = ConstrainedSphericalDeconvModel(gtab, response, noise_type=None,fraction_noisy_voxels=fraction_noisy_voxels,algo=algo,perturbation=to_perturb)
 		time_array = np.zeros(num_csd_loops)
 		for i in range(num_csd_loops):
 			start = time.time()
@@ -55,13 +57,14 @@ if csd_fit:
 			end=time.time()
 			time_array[i]=end-start
 		# print(time_array)
-		print("algorithm:%s, Mean Time for CSD(s):%f, Standard Deviation: %f" %(algo,np.mean(time_array),np.std(time_array)))
+		print("algorithm:%s, noise_type:%s, percent_noise:%f, perturbation:%s, Mean Time for CSD(s):%f, Standard Deviation: %f" %(algo,str(noise_type),fraction_noisy_voxels*100,str(to_perturb),np.mean(time_array),np.std(time_array)))
 
 if read_data:
 
-		cholesky_fodf = pd.read_csv("./cholesky_None_0.csv").values
+		cholesky_fodf = pd.read_csv("./cholesky_None_0_perturb_False.csv").values
 		print(cholesky_fodf.shape)
-		filename = str('noisy_svd')+"_"+str(noise_type)+"_"+str(40)+".csv"
+		filename = str(algo)+"_"+str(noise_type)+"_"+str(int(fraction_noisy_voxels*100))+"_perturb_"+str(to_perturb)+".csv"
+		print(filename)
 		other_fodf= pd.read_csv(filename).values
 		residual_norm = np.linalg.norm((cholesky_fodf-other_fodf),ord=2,axis=1)
 		cholesky_norm = np.linalg.norm((cholesky_fodf),ord=2,axis=1)
@@ -72,7 +75,15 @@ if read_data:
 			if cholesky_norm[i]!=0 :
 				sum_percent+=residual_norm[i]/cholesky_norm[i]*100
 				count+=1
-		print("algorithm:%s, percent_noise:%f ,noise_type:%s,norm difference percent:%f, no. of non zero voxels%f" %(algo, 0,noise_type,(sum_percent/count),count))
+		print("algorithm:%s, percent_noise:%f ,noise_type:%s,norm difference percent:%f, no. of non zero voxels%f" %(algo, fraction_noisy_voxels*100,noise_type,(sum_percent/count),count))
+
+
+
+if solve_by_DSM:
+	a = np.array([[100000,0.1,0.1],[0.5,1,6],[7,8,9]],dtype = np.float)
+	b= np.array([[7],[8],[9]],dtype = np.float)
+	solve_DSM(a,b)
+
 
 # if noise_analysis:
 # 	if csd_fit:

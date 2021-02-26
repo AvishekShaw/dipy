@@ -4,6 +4,7 @@ from scipy.optimize import least_squares
 from scipy.linalg import (svd,qr,solve)
 import scipy.linalg.lapack as ll
 import scipy.linalg as la
+import time
 # from dipy.reconst.csdeconv import (_solve_cholesky)
 
 def gaussian_noisifier_matrix(A,fraction_noisy_voxels):
@@ -84,6 +85,18 @@ def add_zero_noise(A,fraction_noisy_voxels):
 		A[i//n,i%n] = 0
 	return(A)
 
+def perturb_matrix(A,percent_perturbation):
+	begin = time.time()
+	perturbation_list = [-percent_perturbation/100,0,+percent_perturbation/100]
+	m,n = A.shape
+	for i in range(m):
+		for j in range(n):
+			k = np.random.choice(perturbation_list,1)
+			A[i,j]+=k*A[i,j]
+	end = time.time()
+	print("Time taken to perturb matrix %f: " %(end-begin))
+	return A
+
 def unconstrained_objective(x,A,b,H):
 	"""
 	Returns the objective function of minimization of Constrained Spherical Deconvolution.
@@ -131,12 +144,14 @@ def solve_qr(A,b):
 
 def solve_noisy_qr(A,b,fraction_noisy_voxels):
 	U,s,Vh = svd(A)
+	# print(s)
 	s = gaussian_noisifier_vector(s,fraction_noisy_voxels)
+	# print(s)
 	A = U@np.diag(s)@Vh
 	return solve_qr(A,b)
 
 def solve_svd(A,b):
-    U,s,Vh = svd
+    U,s,Vh = svd(A)
     c = np.dot(U.T,b)
     w = np.dot(np.diag(1/s),c)
     x = np.dot(Vh.T,w)
@@ -163,29 +178,25 @@ def solve_noisy_svd(A,b,fraction_noisy_voxels):
 	x = np.dot(Vh.T,w)
 	return x
 
-def solve_DSM(A,b,x_initial):
-	m = x_initial.shape[0]
-	del_x = np.zeros_like(x_initial)
-	for _ in range(2):
+def solve_DSM(A,b):
+	m = b.shape[0]
+	del_x = np.zeros_like(b)
+	x_initial = A.T@b
+	for _ in range(20):
 		for i in range(m):
-			print("Calculation for %d component starts",i)
+			# print("Calculation for %d component starts",i)
 			Numerator = Denominator = 0.0
 			for j in range(m):
-				print("value of j is" +str(j))
-				print("b[j]=%f",b[j])
-				print("Ax[j]=%f",(A@x_initial)[j])
-				print("A[j,i]= %f",A[j,i])
+				# print("value of j is" +str(j))
+				# print("b[j]=%f",b[j])
+				# print("Ax[j]=%f",(A@x_initial)[j])
+				# print("A[j,i]= %f",A[j,i])
 				Numerator += (b[j] - (A@x_initial)[j])/A[j,i]
-				print("Num+= %f", ((b[j] - (A@x_initial)[j])/A[j,i]))
+				# print("Num+= %f", ((b[j] - (A@x_initial)[j])/A[j,i]))
 				Denominator += (A@x_initial)[j]/A[j,i]
-				print("Denom+= %f", ((A@x_initial)[j]/A[j,i]))
+				# print("Denom+= %f", ((A@x_initial)[j]/A[j,i]))
 			del_x[i]+=Numerator/Denominator
 		x_initial += del_x
 		print("x value" + str(np.ndarray.flatten(x_initial)))
 	return x_initial
 
-a = np.array([[1,2,3],[4,5,6],[7,8,9]],dtype = np.float)
-b= np.array([[7],[8],[9]],dtype = np.float)
-x_initial = np.array([[1],[2],[3]],dtype = np.float)
-
-# solve_DSM(a,b,x_initial)

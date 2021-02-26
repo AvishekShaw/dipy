@@ -27,7 +27,7 @@ from dipy.reconst.shm import (sph_harm_ind_list, real_sph_harm,
                               SphHarmModel)
 from dipy.reconst.utils import _roi_in_volume, _mask_from_roi
 from dipy.reconst.custom import (gaussian_noisifier_matrix,add_zero_noise,unconstrained_objective,
-    solve_svd,solve_qr, solve_truncated_svd,solve_noisy_svd,solve_noisy_cholesky,solve_noisy_qr)
+    solve_svd,solve_qr, solve_truncated_svd,solve_noisy_svd,solve_noisy_cholesky,solve_noisy_qr,perturb_matrix)
 from dipy.direction.peaks import peaks_from_model
 from dipy.core.geometry import vec2vec_rotmat
 from dipy.utils.deprecator import deprecate_with_version
@@ -36,6 +36,7 @@ from dipy.utils.deprecator import deprecate_with_version
 write_data = False # whether to write data into files or not
 precision = 5 # the no. of digits after decompositional being stored in the files
 n_components = 5 # for truncated SVD
+percent_perturbation = 0.01
 
 @deprecate_with_version("dipy.reconst.csdeconv.auto_response is deprecated, "
                         "Please use "
@@ -178,7 +179,7 @@ class AxSymShResponse(object):
 
 class ConstrainedSphericalDeconvModel(SphHarmModel):
 
-    def __init__(self, gtab, response,noise_type=None, fraction_noisy_voxels = 0,algo='cholesky', reg_sphere=None, sh_order=8,
+    def __init__(self, gtab, response,noise_type=None, fraction_noisy_voxels = 0,algo='cholesky', perturbation =False, reg_sphere=None, sh_order=8,
                  lambda_=1, tau=0.1, convergence=50):
         r""" Constrained Spherical Deconvolution (CSD) [1]_.
 
@@ -304,8 +305,13 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
         self.sh_order = sh_order
         self.tau = tau
         self.convergence = convergence
+
         
         X = self.R.diagonal() * self.B_dwi
+        
+        self._X = X
+        self._P = np.dot(X.T, X)
+        self.noise_type = noise_type
         if noise_type == None:
             # print(np.max(X))
             pass
@@ -315,21 +321,19 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
 
         elif noise_type == 'zero_noise':
             X = add_zero_noise(X,fraction_noisy_voxels)
-        
-        self._X = X
-        self._P = np.dot(X.T, X)
-        self.noise_type = noise_type
         self.fraction_noisy_voxels = fraction_noisy_voxels
         self.algo = algo
+        self.perturbation = perturbation
+
 
     @multi_voxel_fit
     def fit(self, data):
         dwi_data = data[self._where_dwi]
-        shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.noise_type,self.fraction_noisy_voxels,self.algo,
+        shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.noise_type,self.fraction_noisy_voxels,self.algo,self.perturbation,
             self.tau,convergence=self.convergence, P=self._P)
 
         if write_data:
-            filename = str(self.algo)+"_"+str(self.noise_type)+"_"+str(int(self.fraction_noisy_voxels*100))+".csv"
+            filename = str(self.algo)+"_"+str(self.noise_type)+"_"+str(int(self.fraction_noisy_voxels*100))+"_"+"perturb_"+str(self.perturbation)+".csv"
             # setwd(~/dipy/dipy/data)
             with open(filename,'a') as csvfile:
 	            csvwriter = csv.writer(csvfile)
@@ -587,7 +591,7 @@ def _solve_least_squares(Q,z):
     
 
 
-def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,tau=0.1, convergence=50, P=None):
+def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,perturbation,tau=0.1, convergence=50, P=None):
     r""" Constrained-regularized spherical deconvolution (CSD) [1]_
 
     Deconvolves the axially symmetric single fiber response function `r_rh` in
@@ -783,7 +787,10 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,tau=0.1,
         Q = P + np.dot(H.T, H)
         # print("we have done calculation of Q")
         
-       
+        if perturbation == True:
+            # print(Q)
+            Q = perturb_matrix(Q,percent_perturbation)
+            # print(Q)
         # Solve using Cholesky Decomposition
         if algo == 'cholesky':
         	fodf_sh = _solve_cholesky(Q, z)
