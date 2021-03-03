@@ -9,7 +9,7 @@ from dipy.core.gradients import gradient_table
 from dipy.data import get_fnames, default_sphere
 from dipy.io.gradients import read_bvals_bvecs
 from dipy.io.image import load_nifti
-from dipy.reconst.custom import (gaussian_noisifier_matrix,add_zero_noise,solve_svd,solve_DSM,perturb_matrix)
+from dipy.reconst.custom import (gaussian_noisifier_matrix,add_zero_noise,solve_svd,solve_DSM,perturb_matrix, perturb_data_matrix)
 from scipy.sparse.linalg import cg as conj_grad
 
 
@@ -31,25 +31,35 @@ response, ratio = response_from_mask_ssst(gtab, data, mask)
 
 noise_list = ['gaussian','zero_noise']
 percent_noise_list = [20,40,60,80] 
-algo_list=['cholesky','noisy_cholesky','qr','noisy_qr','svd','noisy_svd','truncated_svd'] 
+algo_list=['cholesky','noisy_cholesky','qr','noisy_qr','svd','noisy_svd','truncated_svd','DSM'] 
 
 #Control variables
-noise_type = None # Select out of None, 'gaussian', 'zero_noise'
-fraction_noisy_voxels  = 0.0 # Wont run if noise_type is None
-data_small = data[15:16, 55:56, 45:46]
+noise_data_matrix_type = None # Select out of None, 'gaussian', 'zero_noise'
+fraction_noisy_data_matrix_voxels  = 0.0 # Wont run if noise_type is None
+
 
 csd_fit = False # runs the CSD fitting procedure
-read_data = False # to read files, code segment below
+read_data = True # to read files, code segment below
 plot_data = False
-to_perturb = False
-solve_by_DSM = True
+to_perturb_coefficient_matrix = False # dont use this. It gives wrong results right now. it perturbs matrix at every iteration
+to_perturb_data_matrix = False
+percent_perturbation = 0.01
+# solve_by_DSM = False
 
 algo = algo_list[4]
 num_csd_loops = 1
 
+
+data_small = data[15:46, 55:86, 45:76]
+
+if to_perturb_data_matrix:
+	data_small = perturb_data_matrix(data_small,percent_perturbation)
+
+
+
 if csd_fit:
 		from dipy.reconst.csdeconv import ConstrainedSphericalDeconvModel
-		csd_model = ConstrainedSphericalDeconvModel(gtab, response, noise_type=None,fraction_noisy_voxels=fraction_noisy_voxels,algo=algo,perturbation=to_perturb)
+		csd_model = ConstrainedSphericalDeconvModel(gtab, response, noise_data_matrix_type=noise_data_matrix_type,fraction_noisy_data_matrix_voxels=fraction_noisy_data_matrix_voxels,algo=algo,perturbation=to_perturb_coefficient_matrix)
 		time_array = np.zeros(num_csd_loops)
 		for i in range(num_csd_loops):
 			start = time.time()
@@ -57,13 +67,13 @@ if csd_fit:
 			end=time.time()
 			time_array[i]=end-start
 		# print(time_array)
-		print("algorithm:%s, noise_type:%s, percent_noise:%f, perturbation:%s, Mean Time for CSD(s):%f, Standard Deviation: %f" %(algo,str(noise_type),fraction_noisy_voxels*100,str(to_perturb),np.mean(time_array),np.std(time_array)))
+		print("algorithm:%s, noise_type:%s, percent_noise:%f, perturbation:%s, Mean Time for CSD(s):%f, Standard Deviation: %f" %(algo,str(noise_data_matrix_type),fraction_noisy_data_matrix_voxels*100,str(to_perturb_coefficient_matrix),np.mean(time_array),np.std(time_array)))
 
 if read_data:
 
-		cholesky_fodf = pd.read_csv("./cholesky_None_0_perturb_False.csv").values
+		cholesky_fodf = pd.read_csv("./cholesky.csv").values
 		print(cholesky_fodf.shape)
-		filename = str(algo)+"_"+str(noise_type)+"_"+str(int(fraction_noisy_voxels*100))+"_perturb_"+str(to_perturb)+".csv"
+		filename = str(algo)+"_"+str(noise_data_matrix_type)+"_"+str(int(fraction_noisy_data_matrix_voxels*100))+"_perturb_"+str(to_perturb_coefficient_matrix)+".csv"
 		print(filename)
 		other_fodf= pd.read_csv(filename).values
 		residual_norm = np.linalg.norm((cholesky_fodf-other_fodf),ord=2,axis=1)
@@ -75,14 +85,14 @@ if read_data:
 			if cholesky_norm[i]!=0 :
 				sum_percent+=residual_norm[i]/cholesky_norm[i]*100
 				count+=1
-		print("algorithm:%s, percent_noise:%f ,noise_type:%s,norm difference percent:%f, no. of non zero voxels%f" %(algo, fraction_noisy_voxels*100,noise_type,(sum_percent/count),count))
+		print("algorithm:%s, percent_noise:%f ,noise_type:%s,norm difference percent:%f, no. of non zero voxels%f" %(algo, fraction_noisy_data_matrix_voxels*100,noise_data_matrix_type,(sum_percent/count),count))
 
 
 
-if solve_by_DSM:
-	a = np.array([[100000,0.1,0.1],[0.5,1,6],[7,8,9]],dtype = np.float)
-	b= np.array([[7],[8],[9]],dtype = np.float)
-	solve_DSM(a,b)
+# if solve_by_DSM:
+# 	A = np.array([[100000,0.1,0.1],[0.5,1,6],[7,8,9]],dtype = np.float)
+# 	b= np.array([[7],[8],[9]],dtype = np.float)
+# 	print(solve_DSM(A,b))
 
 
 # if noise_analysis:

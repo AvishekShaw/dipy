@@ -86,6 +86,9 @@ def add_zero_noise(A,fraction_noisy_voxels):
 	return(A)
 
 def perturb_matrix(A,percent_perturbation):
+	"""
+	Perturb 2D matrix
+	"""
 	begin = time.time()
 	perturbation_list = [-percent_perturbation/100,0,+percent_perturbation/100]
 	m,n = A.shape
@@ -95,6 +98,19 @@ def perturb_matrix(A,percent_perturbation):
 			A[i,j]+=k*A[i,j]
 	end = time.time()
 	print("Time taken to perturb matrix %f: " %(end-begin))
+	return A
+
+def perturb_data_matrix(A,percent_perturbation):
+	perturbation_list = [-percent_perturbation/100,0,+percent_perturbation/100]
+	begin = time.time()
+	for i in range(A.shape[0]):
+		for j in range(A.shape[0]):
+			for k in range(A.shape[0]):
+				for l in range(A.shape[0]):
+					p = np.random.choice(perturbation_list,1)
+					A[i,j,k,l]+=p*A[i,j,k,l]
+	end = time.time()
+	print("Data perturbation done in time %f:" %(end-begin))
 	return A
 
 def unconstrained_objective(x,A,b,H):
@@ -179,6 +195,17 @@ def solve_noisy_svd(A,b,fraction_noisy_voxels):
 	return x
 
 def solve_DSM(A,b):
+	A = A.T
+	m,n = A.shape
+	for i in range(m):
+		for j in range(n):
+			if (A[i,j]<0.1):
+				A[i,j] = 0
+			else:
+				A[i,j]=1/A[i,j]
+	return(A@b)
+				
+def solve_DSM_old(A,b):
 	m = b.shape[0]
 	del_x = np.zeros_like(b)
 	x_initial = A.T@b

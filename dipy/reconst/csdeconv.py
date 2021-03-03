@@ -27,7 +27,7 @@ from dipy.reconst.shm import (sph_harm_ind_list, real_sph_harm,
                               SphHarmModel)
 from dipy.reconst.utils import _roi_in_volume, _mask_from_roi
 from dipy.reconst.custom import (gaussian_noisifier_matrix,add_zero_noise,unconstrained_objective,
-    solve_svd,solve_qr, solve_truncated_svd,solve_noisy_svd,solve_noisy_cholesky,solve_noisy_qr,perturb_matrix)
+    solve_svd,solve_qr, solve_truncated_svd,solve_noisy_svd,solve_noisy_cholesky,solve_noisy_qr,perturb_matrix,solve_DSM)
 from dipy.direction.peaks import peaks_from_model
 from dipy.core.geometry import vec2vec_rotmat
 from dipy.utils.deprecator import deprecate_with_version
@@ -179,7 +179,7 @@ class AxSymShResponse(object):
 
 class ConstrainedSphericalDeconvModel(SphHarmModel):
 
-    def __init__(self, gtab, response,noise_type=None, fraction_noisy_voxels = 0,algo='cholesky', perturbation =False, reg_sphere=None, sh_order=8,
+    def __init__(self, gtab, response,noise_data_matrix_type=None, fraction_noisy_data_matrix_voxels = 0,algo='cholesky', perturbation =False, reg_sphere=None, sh_order=8,
                  lambda_=1, tau=0.1, convergence=50):
         r""" Constrained Spherical Deconvolution (CSD) [1]_.
 
@@ -204,14 +204,14 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
             function without diffusion weighting (i.e. S0).  This is to be able
             to generate a single fiber synthetic signal. The response function
             will be used as deconvolution kernel ([1]_).
-        noise_type : string(optional)
+        noise_data_matrix_type : string(optional)
             Type of noise to be applied to the convolution matrix.
             Possible options:
             -----------------
             None : no noise added
             gaussian : gaussian noise added
             zero_noise : some elements of the convolution matrix made zero
-        fraction_noisy_voxels : real number between 0 and 1, both ends included
+        fraction_noisy_data_matrix_voxels : real number between 0 and 1, both ends included
             fraction of total voxels to which we need to apply noise. 
         reg_sphere : Sphere (optional)
             sphere used to build the regularization B matrix.
@@ -311,17 +311,17 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
         
         self._X = X
         self._P = np.dot(X.T, X)
-        self.noise_type = noise_type
-        if noise_type == None:
+        self.noise_data_matrix_type = noise_data_matrix_type
+        if noise_data_matrix_type == None:
             # print(np.max(X))
             pass
-        elif noise_type == 'gaussian':
-            X = gaussian_noisifier_matrix(X,fraction_noisy_voxels)
+        elif noise_data_matrix_type == 'gaussian':
+            X = gaussian_noisifier_matrix(X,fraction_noisy_data_matrix_voxels)
             # print(np.max(X))
 
-        elif noise_type == 'zero_noise':
-            X = add_zero_noise(X,fraction_noisy_voxels)
-        self.fraction_noisy_voxels = fraction_noisy_voxels
+        elif noise_data_matrix_type == 'zero_noise':
+            X = add_zero_noise(X,fraction_noisy_data_matrix_voxels)
+        self.fraction_noisy_data_matrix_voxels = fraction_noisy_data_matrix_voxels
         self.algo = algo
         self.perturbation = perturbation
 
@@ -329,11 +329,11 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
     @multi_voxel_fit
     def fit(self, data):
         dwi_data = data[self._where_dwi]
-        shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.noise_type,self.fraction_noisy_voxels,self.algo,self.perturbation,
+        shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.noise_data_matrix_type,self.fraction_noisy_data_matrix_voxels,self.algo,self.perturbation,
             self.tau,convergence=self.convergence, P=self._P)
 
         if write_data:
-            filename = str(self.algo)+"_"+str(self.noise_type)+"_"+str(int(self.fraction_noisy_voxels*100))+"_"+"perturb_"+str(self.perturbation)+".csv"
+            filename = str(self.algo)+"_"+str(self.noise_data_matrix_type)+"_"+str(int(self.fraction_noisy_data_matrix_voxels*100))+"_"+"perturb_"+str(self.perturbation)+".csv"
             # setwd(~/dipy/dipy/data)
             with open(filename,'a') as csvfile:
 	            csvwriter = csv.writer(csvfile)
@@ -591,7 +591,7 @@ def _solve_least_squares(Q,z):
     
 
 
-def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,perturbation,tau=0.1, convergence=50, P=None):
+def csdeconv(dwsignal, X, B_reg, noise_data_matrix_type, fraction_noisy_data_matrix_voxels,algo,perturbation,tau=0.1, convergence=50, P=None):
     r""" Constrained-regularized spherical deconvolution (CSD) [1]_
 
     Deconvolves the axially symmetric single fiber response function `r_rh` in
@@ -615,7 +615,7 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,perturba
             None : no noise added
             gaussian : gaussian noise added
             zero_noise : some elements of the convolution matrix made zero
-    fraction_noisy_voxels : real number between 0 and 1, both ends included
+    fraction_noisy_data_matrix_voxels : real number between 0 and 1, both ends included
         fraction of total voxels to which we need to apply noise.
     tau : float
         Threshold controlling the amplitude below which the corresponding fODF
@@ -714,17 +714,17 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,perturba
            constrained super-resolved spherical deconvolution.
 
     """
-    if (noise_type not in [None, 'gaussian','zero_noise']):
+    if (noise_data_matrix_type not in [None, 'gaussian','zero_noise']):
         raise ValueError("Please enter a valid noise type")
     # print(P)
     mu = 1e-5
     if P is None:
-        if noise_type == None:
+        if noise_data_matrix_type == None:
             pass
-        elif noise_type == 'gaussian':
-            X = gaussian_noisifier_matrix(X,fraction_noisy_voxels)
-        elif noise_type == 'zero_noise':
-            X = add_zero_noise(X,fraction_noisy_voxels)
+        elif noise_data_matrix_type == 'gaussian':
+            X = gaussian_noisifier_matrix(X,fraction_noisy_data_matrix_voxels)
+        elif noise_data_matrix_type == 'zero_noise':
+            X = add_zero_noise(X,fraction_noisy_data_matrix_voxels)
         P = np.dot(X.T, X)
     z = np.dot(X.T, dwsignal)
     
@@ -787,6 +787,7 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,perturba
         Q = P + np.dot(H.T, H)
         # print("we have done calculation of Q")
         
+        # this is a wrong way of perturbation. we need to perturb only 
         if perturbation == True:
             # print(Q)
             Q = perturb_matrix(Q,percent_perturbation)
@@ -797,7 +798,7 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,perturba
 
         # Solve using Noisy Cholesky:
         if algo == 'noisy_cholesky':
-            fodf_sh = solve_noisy_cholesky(Q,z,fraction_noisy_voxels) 
+            fodf_sh = solve_noisy_cholesky(Q,z,fraction_noisy_data_matrix_voxels) 
 
        # Solve using numpy least squares
         # fodf_sh = _solve_least_squares(Q, z)
@@ -808,7 +809,7 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,perturba
 
         # Solve using Noisy SVD:
         if algo == 'noisy_svd':
-            fodf_sh = solve_noisy_svd(Q,z,fraction_noisy_voxels)
+            fodf_sh = solve_noisy_svd(Q,z,fraction_noisy_data_matrix_voxels)
 
         # Solve using Truncated SVD:
         if algo == 'truncated_svd':
@@ -821,7 +822,7 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,perturba
 
         # Solve using QR:
         if algo == 'noisy_qr':
-            fod_sh = solve_noisy_qr(Q,z,fraction_noisy_voxels)
+            fod_sh = solve_noisy_qr(Q,z,fraction_noisy_data_matrix_voxels)
 
        # Solve using conjugate gradient method
         if algo == 'cg':
@@ -830,6 +831,9 @@ def csdeconv(dwsignal, X, B_reg, noise_type, fraction_noisy_voxels,algo,perturba
        # Solve using conjugate gradient squared method
         if algo == 'cgs':
         	fodf_sh = cgs(Q,z)[0]
+
+        if algo == "DSM":
+            fod_sh = solve_DSM(Q,z)
 
         x0=np.random.uniform(low=0,high=1,size=45)
 
