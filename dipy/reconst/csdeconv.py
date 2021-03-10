@@ -27,16 +27,19 @@ from dipy.reconst.shm import (sph_harm_ind_list, real_sph_harm,
                               SphHarmModel)
 from dipy.reconst.utils import _roi_in_volume, _mask_from_roi
 from dipy.reconst.custom import (gaussian_noisifier_matrix,add_zero_noise,unconstrained_objective,
-    solve_svd,solve_qr, solve_truncated_svd,solve_noisy_svd,solve_noisy_cholesky,solve_noisy_qr,perturb_matrix,solve_DSM)
+    solve_svd,solve_qr, solve_truncated_svd_by_components,solve_truncated_svd_by_value,solve_noisy_svd,
+    solve_noisy_cholesky,solve_noisy_qr,perturb_matrix,solve_DSM)
 from dipy.direction.peaks import peaks_from_model
 from dipy.core.geometry import vec2vec_rotmat
 from dipy.utils.deprecator import deprecate_with_version
 
+
 # Control parameters
-write_data = False # whether to write data into files or not
+write_data = True # whether to write data into files or not
 precision = 5 # the no. of digits after decompositional being stored in the files
 n_components = 5 # for truncated SVD
-percent_perturbation = 0.01
+# percent_perturbation = 0.01
+# percent_truncation = 1.
 
 @deprecate_with_version("dipy.reconst.csdeconv.auto_response is deprecated, "
                         "Please use "
@@ -179,7 +182,8 @@ class AxSymShResponse(object):
 
 class ConstrainedSphericalDeconvModel(SphHarmModel):
 
-    def __init__(self, gtab, response,noise_data_matrix_type=None, fraction_noisy_data_matrix_voxels = 0,algo='cholesky', perturbation =False, reg_sphere=None, sh_order=8,
+    def __init__(self, gtab, response,noise_data_matrix_type=None, fraction_noisy_data_matrix_voxels = 0,\
+        algo='cholesky', perturbation =False, percent_truncation = 0, reg_sphere=None, sh_order=8,\
                  lambda_=1, tau=0.1, convergence=50):
         r""" Constrained Spherical Deconvolution (CSD) [1]_.
 
@@ -324,21 +328,22 @@ class ConstrainedSphericalDeconvModel(SphHarmModel):
         self.fraction_noisy_data_matrix_voxels = fraction_noisy_data_matrix_voxels
         self.algo = algo
         self.perturbation = perturbation
+        self.percent_truncation = percent_truncation
+
 
 
     @multi_voxel_fit
     def fit(self, data):
         dwi_data = data[self._where_dwi]
-        shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.noise_data_matrix_type,self.fraction_noisy_data_matrix_voxels,self.algo,self.perturbation,
+        shm_coeff, _ = csdeconv(dwi_data, self._X, self.B_reg, self.noise_data_matrix_type,\
+            self.fraction_noisy_data_matrix_voxels,self.algo,self.perturbation, self.percent_truncation,\
             self.tau,convergence=self.convergence, P=self._P)
-
+        filename = str(self.algo)+"_"+str(int(self.percent_truncation*100))+".csv"
         if write_data:
-            filename = str(self.algo)+"_"+str(self.noise_data_matrix_type)+"_"+str(int(self.fraction_noisy_data_matrix_voxels*100))+"_"+"perturb_"+str(self.perturbation)+".csv"
             # setwd(~/dipy/dipy/data)
             with open(filename,'a') as csvfile:
-	            csvwriter = csv.writer(csvfile)
-	            csvwriter.writerow(list(np.round(shm_coeff,precision)))
-            csvfile.close()
+                csvwriter = csv.writer(csvfile)
+                csvwriter.writerow(list(np.round(shm_coeff,precision)))  
         return SphHarmFit(self, shm_coeff, None)
 
     def predict(self, sh_coeff, gtab=None, S0=1.):
@@ -591,7 +596,8 @@ def _solve_least_squares(Q,z):
     
 
 
-def csdeconv(dwsignal, X, B_reg, noise_data_matrix_type, fraction_noisy_data_matrix_voxels,algo,perturbation,tau=0.1, convergence=50, P=None):
+def csdeconv(dwsignal, X, B_reg, noise_data_matrix_type, fraction_noisy_data_matrix_voxels,\
+    algo,perturbation, percent_truncation, tau=0.1, convergence=50, P=None):
     r""" Constrained-regularized spherical deconvolution (CSD) [1]_
 
     Deconvolves the axially symmetric single fiber response function `r_rh` in
@@ -812,9 +818,12 @@ def csdeconv(dwsignal, X, B_reg, noise_data_matrix_type, fraction_noisy_data_mat
             fodf_sh = solve_noisy_svd(Q,z,fraction_noisy_data_matrix_voxels)
 
         # Solve using Truncated SVD:
-        if algo == 'truncated_svd':
-            fodf_sh = solve_truncated_svd(Q,z,n_components)
+        if algo == 'truncated_svd_by_components':
+            fodf_sh = solve_truncated_svd_by_components(Q,z,n_components)
             # print(type(fodf_sh))
+
+        if algo == 'solve_truncated_svd_by_value':
+            fodf_sh = solve_truncated_svd_by_value(Q,z,percent_truncation)
 
         # Solve using QR:
         if algo == 'qr':

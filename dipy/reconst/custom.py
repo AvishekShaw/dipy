@@ -168,20 +168,23 @@ def solve_noisy_qr(A,b,fraction_noisy_voxels):
 
 def solve_svd(A,b):
     U,s,Vh = svd(A)
-    c = np.dot(U.T,b)
-    w = np.dot(np.diag(1/s),c)
-    x = np.dot(Vh.T,w)
-    return x
+    return Vh.T@np.diag(1/s)@U.T@b
 
-def solve_truncated_svd(A,b,n_components):
+def solve_truncated_svd_by_components(A,b,n_components):
     U,s,Vh = svd(A)
     U=U[:,0:n_components]
     s=s[0:n_components]
     Vh=Vh[0:n_components,:]
-    c = np.dot(U.T,b)
-    w = np.dot(np.diag(1/s),c)
-    x = np.dot(Vh.T,w)
-    return x
+    return Vh.T@np.diag(1/s)@U.T@b
+
+def solve_truncated_svd_by_value(A,b,percent_truncation):
+	U,s,Vh = svd(A)
+	# print(s)
+	max_singular_value = percent_truncation/100.0 * s[0]
+	# print("The no. of elements which will be truncated:" + str(np.sum(s<max_singular_value)))
+	s[s<max_singular_value] = 0.0
+	s_inv = np.reciprocal(s, where = s>0.0)
+	return Vh.T@np.diag(s_inv)@U.T@b
 
 def solve_noisy_svd(A,b,fraction_noisy_voxels):
 	"""

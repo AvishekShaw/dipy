@@ -4,14 +4,24 @@ import time
 import random
 import matplotlib.pyplot as plt
 import csv
+import argparse
 
 from dipy.core.gradients import gradient_table
 from dipy.data import get_fnames, default_sphere
 from dipy.io.gradients import read_bvals_bvecs
 from dipy.io.image import load_nifti
-from dipy.reconst.custom import (gaussian_noisifier_matrix,add_zero_noise,solve_svd,solve_DSM,perturb_matrix, perturb_data_matrix)
+from dipy.reconst.custom import (gaussian_noisifier_matrix,add_zero_noise,solve_svd,solve_DSM, 
+	perturb_matrix, perturb_data_matrix)
 from scipy.sparse.linalg import cg as conj_grad
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--csd_fit", type=int, default=1, help="1 for running CSD, 0 for not")
+parser.add_argument("--read_data", type=int, default=0, help="1 for reading data, 0 for not")
+parser.add_argument("--algorithm", type=str, default="cholesky", help="Available: ['cholesky','noisy_cholesky',\
+	'qr','noisy_qr','svd','noisy_svd','truncated_svd_by_components','solve_truncated_svd_by_value','DSM'] ")
+parser.add_argument("--percent_truncation", type=float, default=0, help="Threshold for Singular value truncation")
+parser.add_argument("--num_csd_loops", type=int, default=1, help="number of times for which to run csd")
+opt = parser.parse_args()
 
 hardi_fname, hardi_bval_fname, hardi_bvec_fname = get_fnames('stanford_hardi') # Data shape (81,106,76,160). 160 no. of directions
 data, affine = load_nifti(hardi_fname)
@@ -31,50 +41,57 @@ response, ratio = response_from_mask_ssst(gtab, data, mask)
 
 noise_list = ['gaussian','zero_noise']
 percent_noise_list = [20,40,60,80] 
-algo_list=['cholesky','noisy_cholesky','qr','noisy_qr','svd','noisy_svd','truncated_svd','DSM'] 
+# algo_list=['cholesky','noisy_cholesky','qr','noisy_qr','svd','noisy_svd','truncated_svd_by_components'\
+# ,'solve_truncated_svd_by_value','DSM'] 
 
 #Control variables
 noise_data_matrix_type = None # Select out of None, 'gaussian', 'zero_noise'
 fraction_noisy_data_matrix_voxels  = 0.0 # Wont run if noise_type is None
 
 
-csd_fit = False # runs the CSD fitting procedure
-read_data = True # to read files, code segment below
+# csd_fit_var = opt.csd_fit # runs the CSD fitting procedure
+# read_data_var = opt.read_data # to read files, code segment below
+# percent_truncation_var = opt.percent_truncation
+
 plot_data = False
 to_perturb_coefficient_matrix = False # dont use this. It gives wrong results right now. it perturbs matrix at every iteration
 to_perturb_data_matrix = False
-percent_perturbation = 0.01
+# percent_perturbation = 0.01
+# percent_truncation = 0.01
 # solve_by_DSM = False
 
-algo = algo_list[4]
-num_csd_loops = 1
+# algo = algo_list[7]
+# num_csd_loops = 1
 
-
+data_tiny = data[15:16,55:56, 45:47]
 data_small = data[15:46, 55:86, 45:76]
 
 if to_perturb_data_matrix:
 	data_small = perturb_data_matrix(data_small,percent_perturbation)
 
+if opt.csd_fit:
 
-
-if csd_fit:
 		from dipy.reconst.csdeconv import ConstrainedSphericalDeconvModel
-		csd_model = ConstrainedSphericalDeconvModel(gtab, response, noise_data_matrix_type=noise_data_matrix_type,fraction_noisy_data_matrix_voxels=fraction_noisy_data_matrix_voxels,algo=algo,perturbation=to_perturb_coefficient_matrix)
-		time_array = np.zeros(num_csd_loops)
-		for i in range(num_csd_loops):
+		csd_model = ConstrainedSphericalDeconvModel(gtab, response, noise_data_matrix_type=noise_data_matrix_type,\
+			fraction_noisy_data_matrix_voxels=fraction_noisy_data_matrix_voxels,algo=opt.algorithm,\
+			perturbation=to_perturb_coefficient_matrix, percent_truncation = opt.percent_truncation)
+		time_array = np.zeros(opt.num_csd_loops)
+		for i in range(opt.num_csd_loops):
 			start = time.time()
 			csd_fit = csd_model.fit(data_small)
 			end=time.time()
 			time_array[i]=end-start
 		# print(time_array)
-		print("algorithm:%s, noise_type:%s, percent_noise:%f, perturbation:%s, Mean Time for CSD(s):%f, Standard Deviation: %f" %(algo,str(noise_data_matrix_type),fraction_noisy_data_matrix_voxels*100,str(to_perturb_coefficient_matrix),np.mean(time_array),np.std(time_array)))
+		with open("time.csv",'a') as csvfile:
+			csvwriter = csv.writer(csvfile)
+			csvwriter.writerow([opt.algorithm,opt.percent_truncation*100,end-start])
+		print("algorithm:%s, noise_type:%s, percent_noise:%f, perturbation:%s, Mean Time for CSD(s):%f, Standard Deviation: %f" %(opt.algorithm,str(noise_data_matrix_type),fraction_noisy_data_matrix_voxels*100,str(to_perturb_coefficient_matrix),np.mean(time_array),np.std(time_array)))
 
-if read_data:
+if opt.read_data:
 
-		cholesky_fodf = pd.read_csv("./cholesky.csv").values
-		print(cholesky_fodf.shape)
-		filename = str(algo)+"_"+str(noise_data_matrix_type)+"_"+str(int(fraction_noisy_data_matrix_voxels*100))+"_perturb_"+str(to_perturb_coefficient_matrix)+".csv"
-		print(filename)
+		cholesky_fodf = pd.read_csv("./cholesky_0.csv").values
+		filename = filename = str(opt.algorithm)+"_"+str(int(opt.percent_truncation*100))+".csv"
+		# print(filename)
 		other_fodf= pd.read_csv(filename).values
 		residual_norm = np.linalg.norm((cholesky_fodf-other_fodf),ord=2,axis=1)
 		cholesky_norm = np.linalg.norm((cholesky_fodf),ord=2,axis=1)
@@ -85,7 +102,11 @@ if read_data:
 			if cholesky_norm[i]!=0 :
 				sum_percent+=residual_norm[i]/cholesky_norm[i]*100
 				count+=1
-		print("algorithm:%s, percent_noise:%f ,noise_type:%s,norm difference percent:%f, no. of non zero voxels%f" %(algo, fraction_noisy_data_matrix_voxels*100,noise_data_matrix_type,(sum_percent/count),count))
+
+		with open("error.csv",'a') as csvfile:
+			csvwriter = csv.writer(csvfile)
+			csvwriter.writerow([opt.algorithm,opt.percent_truncation*100,sum_percent/count]) 
+		print("algorithm:%s, percent_truncation:%f,norm difference percent:%f, no. of non zero voxels%f" %(opt.algorithm, opt.percent_truncation*100,(sum_percent/count),count))
 
 
 
